@@ -1,8 +1,8 @@
 services:
-  SEM-WWTP-nh4-concentration:
+  sem-wwtp-nh4-concentration:
     build:
       context: .
-    hostname: SEM-WWTP-nh4-concentration
+    hostname: julia_experience
     volumes:
      - ".:/root/SEM-WWTP-nh4-concentration"
     network_mode: bridge
