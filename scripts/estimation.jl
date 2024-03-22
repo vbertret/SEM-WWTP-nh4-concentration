@@ -32,7 +32,7 @@ println("################ RUN N°$nb_exp EXPERIENCE FOR X_in=$X_in_args ########
 ################### Generate data #####################
 #######################################################
 
-include("generate_data.jl")
+include(scriptsdir("generate_data.jl"))
 
 ###############################################################################
 ################### Define systems for state space models #####################

@@ -19,7 +19,7 @@ using Flux
 #######################################################
 
 X_in_args = 7.8924
-include("generate_data.jl")
+include(scriptsdir("generate_data.jl"))
 
 ###############################################################################
 ################### Define systems for state space models #####################
