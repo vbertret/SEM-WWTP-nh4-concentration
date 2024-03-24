@@ -48,4 +48,6 @@ end
 
 
 include("filters/particle_filter.jl")
+include("filters/extended_kalman_filter.jl")
 include("smoothers/backward_smoothing.jl")
+include("smoothers/extended_kalman_smoother.jl")

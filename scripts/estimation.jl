@@ -47,14 +47,30 @@ function M_t(x, exogenous, u, params)
     β = params[2]
     K = params[5]
 
-    A = sparse([1 - Q_in/V*(dt_model/1440);;])
-    B = sparse([- β*(dt_model/1440);;])
+    A = [1 - Q_in/V*(dt_model/1440);;]
+    B = [- β*(dt_model/1440);;]
 
-    return A*x + B*u.*(x./(x .+ K)) .+ sparse([(X_in*Q_in)/V*(dt_model/1440)])
-
+    return A*x + B*u.*(x./(x .+ K)) .+ [(X_in*Q_in)/V*(dt_model/1440)]
 end
 
 H_t(x, exogenous, params) = x
+
+function dM_t(x, exogenous, u, params)
+
+    # Get Q_in and V
+    Q_in = exogenous[1]
+    V = params[1]
+    β = params[2]
+    K = params[5]
+
+    A = sparse([1 - Q_in/V*(dt_model/1440);;])
+    B = sparse([- β*(dt_model/1440);;])
+
+    return A + B*u.*(K./((x .+ K).^2))
+
+end
+
+dH_t(x, exogenous, params) = I(1)*1
 
 function R_t(exogenous, params)
 
@@ -86,7 +102,7 @@ end
 # Define the system
 n_X = 1
 n_Y = 1
-gnlss = GaussianNonLinearStateSpaceSystem(M_t, H_t, R_t, Q_t, n_X, n_Y, dt_model/(1440))
+gnlss = GaussianNonLinearStateSpaceSystem(M_t, H_t, R_t, Q_t, n_X, n_Y, dt_model/(1440), dM_t, dH_t)
 
 # Define init state
 init_P_0 = zeros(1, 1) .+   1 #0.001
@@ -151,8 +167,18 @@ model = ForecastingModel{GaussianNonLinearStateSpaceSystem}(gnlss, init_state, p
 # Optimize with EM using approximate PFBS smoother
 lb = [1e-2, 1e-2, -Inf, -Inf, 1e-2]
 ub = [Inf, Inf, Inf, Inf, Inf]
-@timed optim_params_pfbs_em, results_pfbs = SEM(model, y_train, E_train, U_train; lb=lb, ub=ub, n_filtering = 300, n_smoothing = 300, maxiters_em=25, optim_method=Opt(:LD_LBFGS, 5), maxiters=100);
+@timed optim_params_pfbs_em, results_pfbs = SEM(model, y_train, E_train, U_train; lb=lb, ub=ub, n_filtering = 300, n_smoothing = 300, maxiters_em=50, optim_method=Opt(:LD_LBFGS, 5), maxiters=100);
 model.parameters = optim_params_pfbs_em
+
+# Define model for EM-EKS
+parameters = [1333.0, 200.0, -2.30, -2.30, 1.0]
+model2 = ForecastingModel{GaussianNonLinearStateSpaceSystem}(gnlss, init_state, parameters)
+
+# Optimize with EM using approximate PFBS smoother
+lb = [1e-2, 1e-2, -Inf, -Inf, 1e-2]
+ub = [Inf, Inf, Inf, Inf, Inf]
+@timed optim_params_eks_em, results_eks = EM_EKS(model2, y_train, E_train, U_train; lb=lb, ub=ub, maxiters_em=50, optim_method=Opt(:LD_LBFGS, 5), maxiters=100);
+model2.parameters = optim_params_eks_em
 
 ######## PEM ########
 nb_obs = size(y_train, 1)
@@ -173,11 +199,11 @@ println("--------------------------------------------------------------------")
 println("----------------------- OPTIMIZATION RESULTS -----------------------")
 println("--------------------------------------------------------------------\n")
 
-println("   V    | Estimated PFBS = ", round(optim_params_pfbs_em[1], digits=3), " | Estimated PEM = ", round(optim_params_pem[1], digits=3))
-println("   β    | Estimated PFBS = ", round(optim_params_pfbs_em[2], digits=3), " | Estimated PEM = ", round(optim_params_pem[2], digits=3))
-println("   K    | Estimated PFBS = ", round(optim_params_pfbs_em[5], digits=3), " | Estimated PEM = ", round(optim_params_pem[3], digits=3))
-println("σ_model | Estimated PFBS = ", round(sqrt(exp(optim_params_pfbs_em[3])), digits=3))
-println("σ_obs   | Estimated PFBS = ", round(sqrt(exp(optim_params_pfbs_em[4])), digits=3))
+println("   V    | Estimated PFBS = ", round(optim_params_pfbs_em[1], digits=3), " | Estimated EKS = ", round(optim_params_eks_em[1], digits=3), " | Estimated PEM = ", round(optim_params_pem[1], digits=3))
+println("   β    | Estimated PFBS = ", round(optim_params_pfbs_em[2], digits=3), " | Estimated EKS = ", round(optim_params_eks_em[2], digits=3), " | Estimated PEM = ", round(optim_params_pem[2], digits=3))
+println("   K    | Estimated PFBS = ", round(optim_params_pfbs_em[5], digits=3), " | Estimated EKS = ", round(optim_params_eks_em[5], digits=3), " | Estimated PEM = ", round(optim_params_pem[3], digits=3))
+println("σ_model | Estimated PFBS = ", round(sqrt(exp(optim_params_pfbs_em[3])), digits=3), " | Estimated EKS = ", round(sqrt(exp(optim_params_eks_em[3])), digits=3))
+println("σ_obs   | Estimated PFBS = ", round(sqrt(exp(optim_params_pfbs_em[4])), digits=3), " | Estimated EKS = ", round(sqrt(exp(optim_params_eks_em[4])), digits=3))
 
 println("\n--------------------------------------------------------------------")
 println("--------------------------------------------------------------------")
@@ -195,6 +221,14 @@ x_pred_em = filter_output.predicted_particles_swarm[Int((1440/dt_model)*(T_train
 mean_em = hcat([mean(x_pred_em[i].particles_state, dims=2) for i in 1:x_pred_em.n_t]...)';
 q_low_em = hcat([[quantile(x_pred_em[i].particles_state[j, :], 0.025) for j in 1:x_pred_em.n_state] for i in 1:x_pred_em.n_t]...)';
 q_high_em = hcat([[quantile(x_pred_em[i].particles_state[j, :], 0.975) for j in 1:x_pred_em.n_state] for i in 1:x_pred_em.n_t]...)';
+
+# Prediction with EM-EKS
+filter_output_eks = filter(model2, y_total, E_total, u_total, filter=ExtendedKalmanFilter(model2));
+smoother_output = smoother(model2, y_total, E_total, u_total, filter_output_eks, smoother_method=ExtendedKalmanSmoother(model2));
+x_pred_em_eks = filter_output_eks.predicted_state[Int((1440/dt_model)*(T_training)+1):end];
+mean_em_eks = hcat([x_pred_em_eks[i].μ_t for i in 1:x_pred_em_eks.n_t]...)';
+q_low_em_eks = hcat([x_pred_em_eks[i].μ_t - 1.96*sqrt.(x_pred_em_eks[i].σ_t)  for i in 1:x_pred_em_eks.n_t]...)';
+q_high_em_eks = hcat([x_pred_em_eks[i].μ_t + 1.96*sqrt.(x_pred_em_eks[i].σ_t)  for i in 1:x_pred_em_eks.n_t]...)';
 
 
 # Prediction with PEM
@@ -217,12 +251,17 @@ full_dict["x_pred_em"] = x_pred_em
 full_dict["mean_em"] = mean_em
 full_dict["q_low_em"] = q_low_em
 full_dict["q_high_em"] = q_high_em
+full_dict["x_pred_em_eks"] = x_pred_em_eks
+full_dict["mean_em_eks"] = mean_em_eks
+full_dict["q_low_em_eks"] = q_low_em_eks
+full_dict["q_high_em_eks"] = q_high_em_eks
 full_dict["x_pred_pem"] = x_pred_pem
 full_dict["x_true"] = x_true
 full_dict["x_true_down"] = x_true_down
 full_dict["index_true"] = index_true
 full_dict["index_pred"] = index_pred
 full_dict["optim_params_pfbs_em"] = optim_params_pfbs_em
+full_dict["optim_params_eks_em"] = optim_params_eks_em
 full_dict["optim_params_pem.u"] = optim_params_pem.u
 
 # Save results

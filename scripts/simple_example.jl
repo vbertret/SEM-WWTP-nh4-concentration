@@ -34,12 +34,29 @@ function M_t(x, exogenous, u, params)
     β = params[2]
     K = params[5]
 
+    A = [1 - Q_in/V*(dt_model/1440);;]
+    B = [- β*(dt_model/1440);;]
+
+    return A*x + B*u.*(x./(x .+ K)) .+ [(X_in*Q_in)/V*(dt_model/1440)]
+
+end
+
+function dM_t(x, exogenous, u, params)
+
+    # Get Q_in and V
+    Q_in = exogenous[1]
+    V = params[1]
+    β = params[2]
+    K = params[5]
+
     A = sparse([1 - Q_in/V*(dt_model/1440);;])
     B = sparse([- β*(dt_model/1440);;])
 
-    return A*x + B*u.*(x./(x .+ K)) .+ sparse([(X_in*Q_in)/V*(dt_model/1440)])
+    return A + B*u.*(K./((x .+ K).^2))
 
 end
+
+dH_t(x, exogenous, params) = I(1)*1
 
 H_t(x, exogenous, params) = x
 
@@ -73,7 +90,7 @@ end
 # Define the system
 n_X = 1
 n_Y = 1
-gnlss = GaussianNonLinearStateSpaceSystem(M_t, H_t, R_t, Q_t, n_X, n_Y, dt_model/(1440))
+gnlss = GaussianNonLinearStateSpaceSystem(M_t, H_t, R_t, Q_t, n_X, n_Y, dt_model/(1440), dM_t, dH_t)
 
 # Define init state
 init_P_0 = zeros(1, 1) .+   1 #0.001
@@ -151,8 +168,19 @@ u_graph = vcat(U_train, U_test)
 x_graph = hcat(x_train, x_test)
 
 n_smoothing = 300
-filter_output, _, _ = filter(model, y_graph, E_graph, u_graph, filter=ParticleFilter(model, n_particles = 300))
+filter_output_pf, _, _ = filter(model, y_graph, E_graph, u_graph, filter=ParticleFilter(model, n_particles = 300))
+include("../src/filters/extended_kalman_filter.jl")
+filter_output_ekf = filter(model, y_graph, E_graph, u_graph, filter=ExtendedKalmanFilter(model))
 smoother_output_bs1 = backward_smoothing(y_graph, E_graph, filter_output, model, model.parameters; n_smoothing=n_smoothing)
+
+smoother_output = smoother(model, y_graph, E_graph, u_graph, filter_output_ekf, smoother_method=ExtendedKalmanSmoother(model))
+
+optim_params_pfbs_em, results_pfbs = EM_EKS(model, y_train, E_train, U_train; lb=lb, ub=ub, maxiters_em=30, optim_method=Opt(:LD_LBFGS, 5), maxiters=100);
+
+plot(smoother_output.smoothed_state[1:20], label="EKS")
+
+plot!(filter_output_ekf.predicted_state[1:20], label="EKF")
+plot!(filter_output_pf.predicted_particles_swarm, label=["PF"])
 
 plot_font = "Computer Modern"
 default(fontfamily=plot_font,
@@ -168,5 +196,5 @@ plot!(legend=:topright)
 vline!([25.0], color=:black)
 annotate!(24.02,7.5,text("Past",plot_font,15))
 annotate!(25.1,7.5,text("Future",plot_font,15))
-plot!(legend=:bottomleft)
-savefig(plotsdir("model_prediction.png"))
+fig = plot!(legend=:bottomleft)
+safesave(plotsdir("model_prediction.pdf"), fig)
