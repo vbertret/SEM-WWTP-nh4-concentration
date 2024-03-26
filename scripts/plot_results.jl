@@ -46,14 +46,14 @@ default(fontfamily=plot_font,
         linewidth=2, framestyle=:box, label=nothing, grid=false)
 
 # plot(rmse_tab_pem)
-plot(q_rmse_low_em, fillrange = q_rmse_high_em, alpha=0.9, label="CI 95% SEM", linestyle=:dashdot, color=:lightblue)
-plot!(mean_rmse_em, label="Mean SEM", linestyle=:dashdot, color=:blue)
-plot!(q_rmse_low_em_eks, fillrange = q_rmse_high_em_eks, alpha=0.9, label="CI 95% EM-EKS", linestyle=:dashdot, color=:red)
-plot!(mean_rmse_em_eks, label="Mean EM-EKS", linestyle=:dashdot, color=:red)
-plot!(q_rmse_low_pem, fillrange = q_rmse_high_pem, alpha=0.4, label="CI 95% PEM", color=:orange)
-plot!(mean_rmse_pem, label="Mean PEM", color=:orange)
+plot(q_rmse_low_em, fillrange = q_rmse_high_em, alpha=0.9, label="CI 95% SEM", linewidth=0, color=:lightblue);
+plot!(mean_rmse_em, label="Mean SEM", linestyle=:dashdot, color=:blue);
+plot!(q_rmse_low_em_eks, fillrange = q_rmse_high_em_eks, alpha=0.4, label="CI 95% EM-EKS", color=:indianred3, linewidth=0);
+plot!(mean_rmse_em_eks, label="Mean EM-EKS", linestyle=:dash, color=:indianred3);
+plot!(q_rmse_low_pem, fillrange = q_rmse_high_pem, alpha=0.2, label="CI 95% PEM", color=:orange, linewidth=0);
+plot!(mean_rmse_pem, label="Mean PEM", color=:orange);
 fig = plot!(xlabel="Hours of prediction", ylabel="RMSE")
-safesave(plotsdir("comparison_sem_pem.png"), fig)
+safesave(plotsdir("comparison_sem_pem.pdf"), fig)
 
 #############################################################################################
 ##################################### IC STATS  #############################################
@@ -106,5 +106,5 @@ var_params_em = sqrt.(var(hcat([(hcat(params_em...)'[:, 1:2]), (sqrt.(exp.(hcat(
 mean_params_em_eks = mean(hcat([(hcat(params_em_eks...)'[:, 1:2]), (sqrt.(exp.(hcat(params_em_eks...)'[:, 3:4]))), (hcat(params_em_eks...)'[:, 5:5])]...), dims=1)'
 var_params_em_eks = sqrt.(var(hcat([(hcat(params_em_eks...)'[:, 1:2]), (sqrt.(exp.(hcat(params_em_eks...)'[:, 3:4]))), (hcat(params_em_eks...)'[:, 5:5])]...), dims=1)')
 
-mean_params_em = mean(hcat([(hcat(params_pem...)'[:, 1:2]), (hcat(params_pem...)'[:, 3:3])]...), dims=1)'
+mean_params_pem = mean(hcat([(hcat(params_pem...)'[:, 1:2]), (hcat(params_pem...)'[:, 3:3])]...), dims=1)'
 var_pem = sqrt.(var(hcat([(hcat(params_pem...)'[:, 1:2]), (hcat(params_pem...)'[:, 3:3])]...), dims=1)')

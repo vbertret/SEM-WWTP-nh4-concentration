@@ -18,7 +18,7 @@ using Flux
 ################### Generate data #####################
 #######################################################
 
-X_in_args = 7.8924
+X_in_args = 7.0
 include(scriptsdir("generate_data.jl"))
 
 ###############################################################################
@@ -137,23 +137,63 @@ ub = [Inf, Inf, Inf, Inf, Inf]
 @timed optim_params_pfbs_em, results_pfbs = SEM(model, y_train, E_train, U_train; lb=lb, ub=ub, n_filtering = 300, n_smoothing = 300, maxiters_em=30, optim_method=Opt(:LD_LBFGS, 5), maxiters=30);
 model.parameters = optim_params_pfbs_em
 
+# Define model for EM-EKS
+parameters2 = [1333.0, 200.0, -2.30, -2.30, 1.0]
+model2 = ForecastingModel{GaussianNonLinearStateSpaceSystem}(gnlss, init_state, parameters2)
+
+# Optimize with EM using approximate EKS smoother
+lb = [1e-2, 1e-2, -Inf, -Inf, 1e-2]
+ub = [Inf, Inf, Inf, Inf, Inf]
+@timed optim_params_eks_em, results_eks = EM_EKS(model2, y_train, E_train, U_train; lb=lb, ub=ub, maxiters_em=30, optim_method=Opt(:LD_LBFGS, 5), maxiters=30);
+model2.parameters = optim_params_eks_em
+
+# Define model for PEM
+function model_nh4(params, x, u, exogenous)
+
+    return x .+ ((exogenous[1:1, :]./params[1]).*(exogenous[2:2, :] .- x) .- params[2].*u.*(x./(x .+ params[3]))).*(dt_model/1440)
+
+end
+
+function loss(params, y, x, u, exogenous)
+    return mean((y .- model_nh4(params, x, u, exogenous)).^2)
+end
+
+callback = function (p, l)
+    println("Loss : ", l)
+    return false
+end
+
+# Optimize with PEM
+nb_obs = size(y_train, 1)
+numEpochs = 50000
+k = nb_obs - 1
+
+y = reshape(y_train[2:end], 1, nb_obs-1) ; x = reshape(y_train[1:(end-1)], 1, nb_obs-1)
+u = U_train[1:(end-1), :]' ; e = E_train[1:(end-1), :]'
+train_loader = Flux.Data.DataLoader((y, x, u, e), batchsize = k)
+
+init_p = parameters[[1, 2, 5]]
+optfun = OptimizationFunction((θ, params, y, x, u, exogenous) -> loss(θ, y, x, u, exogenous), Optimization.AutoForwardDiff())
+optprob = OptimizationProblem(optfun, init_p)
+optim_params_pem = Optimization.solve(optprob, Optimisers.ADAM(0.1), ncycle(train_loader, numEpochs), callback = callback)
+
 println("--------------------------------------------------------------------")
 println("----------------------- OPTIMIZATION RESULTS -----------------------")
 println("--------------------------------------------------------------------\n")
 
-println("   V    | Estimated PFBS = ", round(optim_params_pfbs_em[1], digits=3))
-println("   β    | Estimated PFBS = ", round(optim_params_pfbs_em[2], digits=3))
-println("   K    | Estimated PFBS = ", round(optim_params_pfbs_em[5], digits=3))
-println("σ_model | Estimated PFBS = ", round(sqrt(exp(optim_params_pfbs_em[3])), digits=3))
-println("σ_obs   | Estimated PFBS = ", round(sqrt(exp(optim_params_pfbs_em[4])), digits=3))
+println("   V    | Estimated PFBS = ", round(optim_params_pfbs_em[1], digits=3), " | Estimated EKS = ", round(optim_params_eks_em[1], digits=3), " | Estimated PEM = ", round(optim_params_pem[1], digits=3))
+println("   β    | Estimated PFBS = ", round(optim_params_pfbs_em[2], digits=3), " | Estimated EKS = ", round(optim_params_eks_em[2], digits=3), " | Estimated PEM = ", round(optim_params_pem[2], digits=3))
+println("   K    | Estimated PFBS = ", round(optim_params_pfbs_em[5], digits=3), " | Estimated EKS = ", round(optim_params_eks_em[5], digits=3), " | Estimated PEM = ", round(optim_params_pem[3], digits=3))
+println("σ_model | Estimated PFBS = ", round(sqrt(exp(optim_params_pfbs_em[3])), digits=3), " | Estimated EKS = ", round(sqrt(exp(optim_params_eks_em[3])), digits=3))
+println("σ_obs   | Estimated PFBS = ", round(sqrt(exp(optim_params_pfbs_em[4])), digits=3), " | Estimated EKS = ", round(sqrt(exp(optim_params_eks_em[4])), digits=3))
 
 println("\n--------------------------------------------------------------------")
 println("--------------------------------------------------------------------")
 println("--------------------------------------------------------------------")
 
-#######################################################
-################# Prediction with PEM #################
-#######################################################
+##############################################
+################# Prediction #################
+##############################################
 
 index_x = [T_steady_state + (1/1440)*t for t in 1:Int((T_training+T_testing)*1440)]
 index_y = [T_steady_state + (1/1440)*t*dt_model for t in 1:Int((T_training)*1440/dt_model)]
@@ -167,34 +207,37 @@ y_graph = vcat(y_train, similar(y_test).*NaN)
 u_graph = vcat(U_train, U_test)
 x_graph = hcat(x_train, x_test)
 
-n_smoothing = 300
-filter_output_pf, _, _ = filter(model, y_graph, E_graph, u_graph, filter=ParticleFilter(model, n_particles = 300))
-include("../src/filters/extended_kalman_filter.jl")
-filter_output_ekf = filter(model, y_graph, E_graph, u_graph, filter=ExtendedKalmanFilter(model))
-smoother_output_bs1 = backward_smoothing(y_graph, E_graph, filter_output, model, model.parameters; n_smoothing=n_smoothing)
+# Prediction with EM-PF
+n_smoothing = 1000
+filter_output_pf, _, _ = filter(model, y_graph, E_graph, u_graph, filter=ParticleFilter(model, n_particles = 1000))
+smoother_output_bs1 = backward_smoothing(y_graph, E_graph, filter_output_pf, model, model.parameters; n_smoothing=n_smoothing)
 
-smoother_output = smoother(model, y_graph, E_graph, u_graph, filter_output_ekf, smoother_method=ExtendedKalmanSmoother(model))
+# Prediction with EM-EKF
+filter_output_ekf = filter(model2, y_graph, E_graph, u_graph, filter=ExtendedKalmanFilter(model2))
+smoother_output_ekf = smoother(model2, y_graph, E_graph, u_graph, filter_output_ekf, smoother_method=ExtendedKalmanSmoother(model2));
 
-optim_params_pfbs_em, results_pfbs = EM_EKS(model, y_train, E_train, U_train; lb=lb, ub=ub, maxiters_em=30, optim_method=Opt(:LD_LBFGS, 5), maxiters=100);
-
-plot(smoother_output.smoothed_state[1:20], label="EKS")
-
-plot!(filter_output_ekf.predicted_state[1:20], label="EKF")
-plot!(filter_output_pf.predicted_particles_swarm, label=["PF"])
+# Prediction with PEM
+x_pred_pem = zeros(Int(1440/dt_model+1));
+x_pred_pem[1] = y_train[end, 1];
+for i in 1:Int(1440/dt_model)
+    x_pred_pem[i+1] = model_nh4(optim_params_pem, x_pred_pem[i], U_test[i, :], E_test[i, :])[1, 1]
+end
 
 plot_font = "Computer Modern"
 default(fontfamily=plot_font,
         linewidth=2, framestyle=:box, label=nothing, grid=false)
-scalefontsizes(0.9)
+scalefontsizes(1.5)
 
-plot(index_u[Int((1440/dt_model)*(T_training-1)):end], u_graph[Int((1440/dt_model)*(T_training-1)):end, :], alpha=0.5, color=:grey, label=L"u(t)")
-plot!(filter_output.predicted_particles_swarm[Int((1440/dt_model)*(T_training-1)+1):end], label= ["Model"])
+plot(index_u[Int((1440/dt_model)*(T_training-1)+1):end], u_graph[Int((1440/dt_model)*(T_training-1)+1):end, :], alpha=0.5, color=:grey, label=L"u(t)")
+plot!(filter_output_pf.predicted_particles_swarm[Int((1440/dt_model)*(T_training-1)+1):end], label= ["PF"], linewidth=0.95, color=:deepskyblue1, linestyle=:dashdot)
+plot!(filter_output_ekf.predicted_state[Int((1440/dt_model)*(T_training-1)+1):end], label= "EKF", linestyle=:dashdot, linewidth=0.95, color=:indianred3)
 plot!(size=(1000, 320), xlabel="Time (in days)", ylabel=L"S_{NH}"*" (mg/L)", margin=6mm)
-plot!(index_x[Int((1440)*(T_training-1)):end], x_graph[10, Int((1440)*(T_training-1)):end], label="True NH4", linestyle=:dashdot)
+plot!(index_x[Int((1440)*(T_training-1)+1):end], x_graph[10, Int((1440)*(T_training-1)+1):end], label="True NH4", linestyle=:solid, linewidth=1, color=:purple)
 scatter!(index_y[Int((1440/dt_model)*(T_training-1)+1):end], y_train[Int((1440/dt_model)*(T_training-1)+1):end], label="Observations", markersize=1.0)
+plot!(index_u[Int((1440/dt_model)*(T_training)):end], x_pred_pem, label="Mean PEM", color=:orange, linewidth=0.75, linestyle=:dash)
 plot!(legend=:topright)
-vline!([25.0], color=:black)
-annotate!(24.02,7.5,text("Past",plot_font,15))
-annotate!(25.1,7.5,text("Future",plot_font,15))
+vline!([T_steady_state + T_training], color=:black)
+annotate!(T_steady_state + T_training - 1 + 0.02,6.5,text("Past",plot_font,15))
+annotate!(T_steady_state + T_training + 0.1,6.5,text("Future",plot_font,15))
 fig = plot!(legend=:bottomleft)
 safesave(plotsdir("model_prediction.pdf"), fig)
